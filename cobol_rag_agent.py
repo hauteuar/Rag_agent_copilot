@@ -400,8 +400,11 @@ class COBOLParser:
         current_condition = None
         
         # Pattern for MOVE statements: MOVE 'LITERAL' TO VARIABLE
+        # Line 344 - NEW CODE
+        # Supports: VARIABLE, VARIABLE(N), VARIABLE.FIELD, VARIABLE(1:8), VARIABLE(N).FIELD
         move_pattern = re.compile(
-            r"MOVE\s+['\"]?([A-Z0-9\-]+)['\"]?\s+TO\s+([A-Z0-9\-]+)",
+            r"MOVE\s+['\"]?([A-Z0-9\-]+)['\"]?\s+TO\s+"
+            r"([A-Z0-9\-]+(?:\([^)]*\))?(?:\.[A-Z0-9\-]+)?(?:\([^)]*\))?)",
             re.IGNORECASE
         )
         
@@ -527,23 +530,90 @@ class COBOLParser:
         return operations
     
     def extract_cics_commands(self, source_code: str) -> List[Dict[str, Any]]:
-        """Extract CICS commands (general)"""
+        """Extract CICS commands with resource names (files, queues)"""
         commands = []
-        pattern = re.compile(r'EXEC\s+CICS\s+(\w+)', re.IGNORECASE)
-        
         lines = source_code.split('\n')
-        for i, line in enumerate(lines):
-            clean_line = line[6:72] if len(line) > 6 else line
+        
+        in_cics = False
+        cics_buffer = []
+        cics_start_line = 0
+        
+        for i, line in enumerate(lines, 1):
+            line_upper = line.upper().strip()
             
-            for match in pattern.finditer(clean_line):
-                commands.append({
-                    'command': match.group(1),
-                    'line': i + 1,
-                    'source_line': line.strip()
-                })
+            if 'EXEC CICS' in line_upper:
+                if in_cics:
+                    # Process previous CICS statement
+                    commands.extend(self._parse_cics_statement(
+                        ' '.join(cics_buffer), cics_start_line
+                    ))
+                
+                in_cics = True
+                cics_buffer = [line]
+                cics_start_line = i
+            
+            elif in_cics:
+                cics_buffer.append(line)
+                
+                if 'END-EXEC' in line_upper:
+                    # Process complete CICS statement
+                    full_statement = ' '.join(cics_buffer)
+                    commands.extend(self._parse_cics_statement(full_statement, cics_start_line))
+                    
+                    in_cics = False
+                    cics_buffer = []
         
         return commands
-    
+
+    def _parse_cics_statement(self, statement: str, line_num: int) -> List[Dict[str, Any]]:
+        """Parse a single CICS statement to extract command and resource"""
+        commands = []
+        
+        # Extract CICS command (READ, WRITE, DELETE, etc.)
+        cmd_match = re.search(r'EXEC\s+CICS\s+(\w+)', statement, re.IGNORECASE)
+        if not cmd_match:
+            return commands
+        
+        command = cmd_match.group(1).upper()
+        
+        # Extract resource name (DATASET, FILE, or QUEUE)
+        resource_match = re.search(
+            r"(?:DATASET|FILE|QUEUE)\s*\(\s*['\"]?([A-Z0-9\-_]+)['\"]?\s*\)",
+            statement,
+            re.IGNORECASE
+        )
+        
+        resource = resource_match.group(1) if resource_match else None
+        
+        commands.append({
+            'command': command,
+            'resource': resource,  # ← NEW: Actual file/queue name
+            'resource_type': self._detect_resource_type(command, resource),
+            'line': line_num,
+            'source_line': statement.strip()
+        })
+        
+        return commands
+
+    def _detect_resource_type(self, command: str, resource: str) -> str:
+        """Determine if resource is DATASET, FILE, or QUEUE"""
+        if not resource:
+            return 'UNKNOWN'
+        
+        # Queue names often end with -Q or contain QUEUE
+        if resource.endswith('-Q') or 'QUEUE' in resource.upper():
+            return 'QUEUE'
+        
+        # Files typically have logical names
+        if 'FILE' in resource.upper() or 'DATASET' in resource.upper():
+            return 'FILE'
+        
+        # Default: classify by command type
+        if command in ['PUT', 'GET', 'RETRIEVE']:
+            return 'QUEUE'
+        else:
+            return 'FILE'
+        
     def extract_mq_operations(self, source_code: str) -> List[Dict[str, Any]]:
         """Extract MQ operations"""
         operations = []

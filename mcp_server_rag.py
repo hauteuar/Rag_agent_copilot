@@ -72,7 +72,7 @@ def generate_flow_html(mermaid_code: str, node_name: str, output_path: str = Non
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>COBOL Flow Diagram - {node_name}</title>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
     <style>
         * {{
             margin: 0;
@@ -793,7 +793,40 @@ You can now explore the flow visually in your browser!"""
                 if step['calls']:
                     output_lines.append(f"{indent}  🔗 Calls:")
                     for call in step['calls']:
-                        output_lines.append(f"{indent}    - {call['program']} ({call['call_type']})")
+                        program = call['program']
+                        call_type = call['call_type']
+                        
+                        # Format call with type indicator
+                        output = f"  🔗 {program}"
+                        
+                        if call.get('is_dynamic'):
+                            output += f" (cics_link_dynamic)"
+                            
+                            # Show resolution method
+                            if call.get('resolved_via_group'):
+                                output += f"\n       └─ Group: {call['resolved_via_group']}"
+                            else:
+                                output += f"\n       └─ Direct: Variable resolution"
+                            
+                            # Show resolution details
+                            if call.get('resolution_details'):
+                                details = call['resolution_details']
+                                for i, detail in enumerate(details):
+                                    line_num = detail.get('line', '?')
+                                    value = detail.get('value', '?')
+                                    condition = detail.get('condition', '')
+                                    
+                                    if i == 0:
+                                        output += f"\n       └─ Line {line_num}: MOVE '{value}' TO {call.get('variable', '?')}"
+                                    else:
+                                        output += f"\n       └─ Line {line_num}: MOVE '{value}' TO {call.get('variable', '?')}"
+                                    
+                                    if condition and condition != 'None':
+                                        output += f" [{condition}]"
+                        else:
+                            output += f" (static)"
+                        
+                        output_lines.append(output)
                 
                 output_lines.append("")
             
