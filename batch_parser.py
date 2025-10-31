@@ -24,7 +24,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Set, Optional
 import hashlib
-
+import cobol_rag_patches  # ← Critical: Import FIRST
 # Import core components from cobol_rag_agent.py
 try:
     from cobol_rag_agent import (
