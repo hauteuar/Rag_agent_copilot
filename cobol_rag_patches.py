@@ -369,17 +369,34 @@ def patch_graph_builder_cics():
     """
     from cobol_rag_agent import ProgramGraphBuilder
     
-    def enhanced_add_cics_command(self, program_id: str, command_info: Dict[str, Any]):
+    def enhanced_add_cics_command(self, program_id: str, command_info):
         """
         Add CICS file as input or output node based on operation type.
         
         Args:
-            command_info: Dict with keys:
+            command_info: Dict with keys (new format):
                 - command: CICS command (READ, WRITE, etc.)
                 - resource: File/dataset name
                 - resource_type: DATASET, FILE, or QUEUE
                 - io_direction: INPUT or OUTPUT
+            OR string (old format): just the command name (for backward compatibility)
         """
+        # Handle backward compatibility: if command_info is a string or dict without 'resource'
+        if isinstance(command_info, str):
+            # Old format: just command name - skip it (we can't extract file info)
+            logger.debug(f"Skipping old-format CICS command: {command_info}")
+            return
+        
+        if not isinstance(command_info, dict):
+            logger.warning(f"Invalid command_info type: {type(command_info)}")
+            return
+        
+        # Check if this is the old dict format (has 'command' but no 'resource')
+        if 'command' in command_info and 'resource' not in command_info:
+            logger.debug(f"Skipping old-format CICS command dict: {command_info.get('command')}")
+            return
+        
+        # New format: extract all fields
         resource = command_info.get('resource')
         resource_type = command_info.get('resource_type', 'FILE')
         io_direction = command_info.get('io_direction', 'INPUT')
