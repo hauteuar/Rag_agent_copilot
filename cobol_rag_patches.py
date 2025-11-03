@@ -1,14 +1,15 @@
 """
-COBOL RAG Agent Patches v1.0.3 - COMPLETE FIX
-==============================================
-Fixes:
-1. Dynamic call resolution (VALUE clauses)
-2. CICS file extraction (parses old format)
-3. Flow diagram colors
-4. Tree-sitter warning fix
+COBOL RAG Agent Patches v1.0.4 - COMPREHENSIVE FIX
+===================================================
+Fixes ALL 4 reported issues:
+1. CICS file extraction for search_code/full_program_chain
+2. combined_search index out of bounds error
+3. tree-sitter COBOL installation detection
+4. Flow HTML color coding (all nodes showing blue instead of proper colors)
 
 USAGE:
-    import cobol_rag_patches  # Auto-applies all patches
+    import cobol_rag_patches_v104 as patches
+    patches.apply_all_patches()
 """
 
 import re
@@ -18,432 +19,27 @@ from typing import List, Dict, Any
 logger = logging.getLogger(__name__)
 
 
-def patch_treesitter_languages():
-    """
-    Patch COBOLParser to use tree_sitter_languages (modern API)
-    This eliminates the "__init__() takes exactly 1 argument" warning
-    """
-    from cobol_rag_agent import COBOLParser
-    
-    def fixed_init_parser(self):
-        """Initialize Tree-Sitter parser for COBOL using tree_sitter_languages"""
-        try:
-            # Method 1: Try tree_sitter_languages (easiest, modern)
-            try:
-                from tree_sitter_languages import get_language, get_parser
-                
-                # Get COBOL language and parser
-                self.parser = get_parser('cobol')
-                logger.info("✓ Tree-Sitter COBOL parser initialized via tree_sitter_languages")
-                return
-            except ImportError:
-                logger.debug("tree_sitter_languages not installed")
-            except Exception as e:
-                logger.debug(f"tree_sitter_languages failed: {e}")
-            
-            # Method 2: Try tree_sitter_cobol (new API)
-            try:
-                from tree_sitter import Parser
-                import tree_sitter_cobol
-                
-                COBOL_LANGUAGE = tree_sitter_cobol.language()
-                self.parser = Parser()
-                self.parser.set_language(COBOL_LANGUAGE)
-                logger.info("✓ Tree-Sitter COBOL parser initialized via tree_sitter_cobol")
-                return
-            except ImportError:
-                logger.debug("tree_sitter_cobol not installed")
-            except Exception as e:
-                logger.debug(f"tree_sitter_cobol failed: {e}")
-            
-            # Method 3: Try old API (for backward compatibility)
-            try:
-                from tree_sitter import Language, Parser
-                
-                COBOL_LANGUAGE = Language('build/cobol.so', 'cobol')
-                self.parser = Parser()
-                self.parser.set_language(COBOL_LANGUAGE)
-                logger.info("✓ Tree-Sitter COBOL parser initialized via old API")
-                return
-            except Exception as e:
-                logger.debug(f"Old API failed: {e}")
-            
-            # All methods failed
-            raise Exception("No tree-sitter COBOL installation found")
-            
-        except Exception as e:
-            logger.warning(f"Tree-sitter COBOL not available: {e}")
-            logger.info("Using heuristic parser (fully functional)")
-            self.parser = None
-    
-    # Apply patch
-    COBOLParser._init_parser = fixed_init_parser
-    logger.info("✓ Patched COBOLParser._init_parser (tree-sitter warning fix)")
+# ============================================================================
+# FIX 1: CICS File Extraction (for search_code/full_program_chain)
+# ============================================================================
 
-
-def patch_dynamic_call_resolution():
+def patch_cics_file_nodes():
     """
-    Patch COBOLParser._resolve_dynamic_call_variables to handle:
-    - Group-level VALUE clauses (01 WA-CONSTANTS with 05 WA-VAR VALUE 'PROG')
-    - Subscripted variables (MOVE WA-VAR(INDEX) TO CALL-VAR)
-    - Reference modifications (MOVE WA-VAR(1:8) TO CALL-VAR)
-    """
-    from cobol_rag_agent import COBOLParser
-    
-    def enhanced_resolve_dynamic_call_variables(self, calls: List[Dict], source_code: str) -> List[Dict]:
-        """
-        Enhanced resolver that handles group variables with VALUE clauses.
-        
-        Example COBOL structure:
-            01 WA-CONSTANTS.
-               05 WA-TMSBTSI1 PIC X(08) VALUE 'TMSBTSI1'.
-               05 WA-TMSBTSI3 PIC X(08) VALUE 'TMSBTSI3'.
-            ...
-            MOVE WA-TMSBTSI1 TO WS-PROGRAM-NAME
-            CALL WS-PROGRAM-NAME
-        """
-        # Build comprehensive variable value map
-        variable_values = {}
-        lines = source_code.split('\n')
-        current_condition = None
-        current_group = None
-        
-        # Enhanced patterns
-        # Pattern 1: Direct MOVE with literals
-        move_literal_pattern = re.compile(
-            r"MOVE\s+['\"]([A-Z0-9\-]+)['\"]\s+TO\s+"
-            r"([A-Z0-9\-]+(?:\([^)]*\))?(?:\.[A-Z0-9\-]+)?(?:\([^)]*\))?)",
-            re.IGNORECASE
-        )
-        
-        # Pattern 2: MOVE from one variable to another (for subscripted access)
-        move_var_pattern = re.compile(
-            r"MOVE\s+([A-Z0-9\-]+(?:\([^)]*\))?(?:\.[A-Z0-9\-]+)?(?:\([^)]*\))?)\s+TO\s+"
-            r"([A-Z0-9\-]+(?:\([^)]*\))?(?:\.[A-Z0-9\-]+)?(?:\([^)]*\))?)",
-            re.IGNORECASE
-        )
-        
-        # Pattern 3: Variable definitions with VALUE clause
-        # This is critical for catching group-level constants
-        value_def_pattern = re.compile(
-            r"^\s*(\d+)\s+([A-Z0-9\-]+)\s+(?:PIC\s+[^\s]+\s+)?VALUE\s+['\"]([A-Z0-9\-]+)['\"]",
-            re.IGNORECASE
-        )
-        
-        # Pattern 4: Group level detection
-        group_pattern = re.compile(r"^\s*01\s+([A-Z0-9\-]+)", re.IGNORECASE)
-        
-        logger.debug("=" * 70)
-        logger.debug("ENHANCED DYNAMIC CALL RESOLUTION")
-        logger.debug("=" * 70)
-        
-        # First pass: Build variable definitions map
-        for line_num, line in enumerate(lines, 1):
-            clean_line = line[6:72] if len(line) > 6 else line
-            line_upper = clean_line.upper().strip()
-            
-            # Track group boundaries
-            group_match = group_pattern.match(clean_line)
-            if group_match:
-                current_group = group_match.group(1)
-                logger.debug(f"Line {line_num}: Entering group {current_group}")
-                continue
-            
-            # Check for VALUE definitions
-            value_match = value_def_pattern.match(clean_line)
-            if value_match:
-                level = value_match.group(1)
-                variable = value_match.group(2)
-                value = value_match.group(3)
-                
-                # Store the value
-                if variable not in variable_values:
-                    variable_values[variable] = []
-                
-                variable_values[variable].append({
-                    'value': value,
-                    'line': line_num,
-                    'source_line': line.strip(),
-                    'group': current_group,
-                    'definition_type': 'VALUE_CLAUSE'
-                })
-                
-                logger.debug(f"Line {line_num}: Found VALUE definition: {variable} = '{value}' (group: {current_group})")
-                continue
-            
-            # Track conditional context
-            if line_upper.startswith('IF '):
-                current_condition = line.strip()
-            elif line_upper.startswith(('END-IF', 'ELSE')):
-                current_condition = None
-            elif line_upper.endswith('.') and current_condition:
-                current_condition = None
-            
-            # Pattern 1: MOVE literal to variable
-            literal_match = move_literal_pattern.search(clean_line)
-            if literal_match:
-                value = literal_match.group(1)
-                # Extract base variable name (remove subscripts and ref mods)
-                variable = literal_match.group(2)
-                base_var = re.sub(r'\([^)]*\)', '', variable)  # Remove subscripts
-                base_var = re.sub(r'\.[A-Z0-9\-]+$', '', base_var)  # Remove field qualifiers
-                
-                if base_var not in variable_values:
-                    variable_values[base_var] = []
-                
-                variable_values[base_var].append({
-                    'value': value,
-                    'line': line_num,
-                    'condition': current_condition,
-                    'source_line': line.strip(),
-                    'definition_type': 'MOVE_LITERAL'
-                })
-                
-                logger.debug(f"Line {line_num}: Found MOVE literal: '{value}' → {base_var}")
-            
-            # Pattern 2: MOVE variable to variable (for tracing)
-            var_match = move_var_pattern.search(clean_line)
-            if var_match and not literal_match:  # Don't double-process
-                source_var = var_match.group(1)
-                target_var = var_match.group(2)
-                
-                # Extract base names
-                base_source = re.sub(r'\([^)]*\)', '', source_var)
-                base_target = re.sub(r'\([^)]*\)', '', target_var)
-                
-                # If source variable has known values, propagate them
-                if base_source in variable_values:
-                    if base_target not in variable_values:
-                        variable_values[base_target] = []
-                    
-                    for val_info in variable_values[base_source]:
-                        variable_values[base_target].append({
-                            'value': val_info['value'],
-                            'line': line_num,
-                            'source_line': line.strip(),
-                            'derived_from': base_source,
-                            'definition_type': 'MOVE_VARIABLE'
-                        })
-                    
-                    logger.debug(f"Line {line_num}: Propagated values from {base_source} → {base_target}")
-        
-        logger.debug("=" * 70)
-        logger.debug(f"Variable values map built: {len(variable_values)} variables found")
-        for var, vals in variable_values.items():
-            logger.debug(f"  {var}: {[v['value'] for v in vals]}")
-        logger.debug("=" * 70)
-        
-        # Second pass: Resolve each dynamic call
-        resolved_count = 0
-        unresolved_count = 0
-        
-        for call in calls:
-            if not call.get('is_dynamic') or not call.get('variable'):
-                continue
-            
-            variable = call['variable']
-            base_var = re.sub(r'\([^)]*\)', '', variable)  # Remove subscripts
-            
-            logger.debug(f"\nResolving dynamic call: {variable} (base: {base_var})")
-            
-            # Direct match
-            if base_var in variable_values:
-                call['possible_targets'] = list(set([v['value'] for v in variable_values[base_var]]))
-                call['resolution_details'] = variable_values[base_var]
-                resolved_count += 1
-                logger.info(f"✓ Resolved {variable} → {call['possible_targets']}")
-                continue
-            
-            # Fuzzy match: check if variable is part of a group
-            found_match = False
-            for var_name, values in variable_values.items():
-                # Check for partial matches (e.g., BUSINESS might match BUSINESS-FUNC)
-                if var_name in base_var or base_var in var_name:
-                    call['possible_targets'] = list(set([v['value'] for v in values]))
-                    call['resolution_details'] = values
-                    call['resolved_via_group'] = var_name
-                    resolved_count += 1
-                    found_match = True
-                    logger.info(f"✓ Resolved {variable} via fuzzy match {var_name} → {call['possible_targets']}")
-                    break
-            
-            if not found_match:
-                unresolved_count += 1
-                logger.warning(f"✗ Could not resolve variable: {variable} at line {call['line']}")
-        
-        dynamic_call_count = len([c for c in calls if c.get('is_dynamic')])
-        logger.info("=" * 70)
-        logger.info(f"Dynamic call resolution complete:")
-        logger.info(f"  Total dynamic calls: {dynamic_call_count}")
-        logger.info(f"  Resolved: {resolved_count}")
-        logger.info(f"  Unresolved: {unresolved_count}")
-        logger.info("=" * 70)
-        
-        return calls
-    
-    # Apply patch
-    COBOLParser._resolve_dynamic_call_variables = enhanced_resolve_dynamic_call_variables
-    logger.info("✓ Patched COBOLParser._resolve_dynamic_call_variables")
-
-
-def patch_cics_file_extraction():
-    """
-    Patch COBOLParser to extract actual file/dataset names from CICS commands
-    and determine if they're input or output based on operation type.
-    """
-    from cobol_rag_agent import COBOLParser
-    
-    def enhanced_extract_cics_commands(self, source_code: str) -> List[Dict[str, Any]]:
-        """
-        Extract CICS commands with actual file/dataset names and I/O classification.
-        
-        Operations classified as:
-        - INPUT: READ, READNEXT, READPREV, STARTBR
-        - OUTPUT: WRITE, REWRITE, DELETE
-        - BOTH: (no classification - treat as input)
-        
-        Extracts from:
-        - DATASET(...) for file operations
-        - FILE(...) for file operations
-        - QUEUE(...) for queue operations
-        """
-        commands = []
-        lines = source_code.split('\n')
-        
-        in_cics = False
-        cics_buffer = []
-        cics_start_line = 0
-        
-        # I/O operation classification
-        input_operations = {'READ', 'READNEXT', 'READPREV', 'STARTBR'}
-        output_operations = {'WRITE', 'REWRITE', 'DELETE'}
-        control_operations = {'ENDBR', 'UNLOCK', 'HANDLE'}
-        
-        for i, line in enumerate(lines, 1):
-            line_upper = line.upper().strip()
-            
-            if 'EXEC CICS' in line_upper:
-                if in_cics:
-                    # Process previous CICS statement
-                    commands.extend(self._parse_cics_io_statement(
-                        ' '.join(cics_buffer), 
-                        cics_start_line,
-                        input_operations,
-                        output_operations,
-                        control_operations
-                    ))
-                
-                in_cics = True
-                cics_buffer = [line]
-                cics_start_line = i
-            
-            elif in_cics:
-                cics_buffer.append(line)
-                
-                if 'END-EXEC' in line_upper:
-                    # Process complete CICS statement
-                    full_statement = ' '.join(cics_buffer)
-                    commands.extend(self._parse_cics_io_statement(
-                        full_statement, 
-                        cics_start_line,
-                        input_operations,
-                        output_operations,
-                        control_operations
-                    ))
-                    
-                    in_cics = False
-                    cics_buffer = []
-        
-        logger.debug(f"Extracted {len(commands)} CICS I/O commands")
-        return commands
-    
-    def parse_cics_io_statement(self, statement: str, line_num: int,
-                                input_ops: set, output_ops: set, control_ops: set) -> List[Dict[str, Any]]:
-        """Parse a single CICS statement to extract I/O operations"""
-        commands = []
-        
-        # Extract CICS command
-        cmd_match = re.search(r'EXEC\s+CICS\s+(\w+)', statement, re.IGNORECASE)
-        if not cmd_match:
-            return commands
-        
-        command = cmd_match.group(1).upper()
-        
-        # Skip control operations (ENDBR, UNLOCK, etc.)
-        if command in control_ops:
-            logger.debug(f"Skipping control operation: {command}")
-            return commands
-        
-        # Extract resource name from DATASET, FILE, or QUEUE
-        resource_patterns = [
-            (r"DATASET\s*\(\s*['\"]?([A-Z0-9\-_]+)['\"]?\s*\)", 'DATASET'),
-            (r"FILE\s*\(\s*['\"]?([A-Z0-9\-_]+)['\"]?\s*\)", 'FILE'),
-            (r"QUEUE\s*\(\s*['\"]?([A-Z0-9\-_]+)['\"]?\s*\)", 'QUEUE')
-        ]
-        
-        resource = None
-        resource_type = None
-        
-        for pattern, res_type in resource_patterns:
-            match = re.search(pattern, statement, re.IGNORECASE)
-            if match:
-                resource = match.group(1)
-                resource_type = res_type
-                break
-        
-        if not resource:
-            # No explicit resource found
-            logger.debug(f"No resource found in CICS {command}")
-            return commands
-        
-        # Determine I/O direction
-        io_direction = 'UNKNOWN'
-        if command in input_ops:
-            io_direction = 'INPUT'
-        elif command in output_ops:
-            io_direction = 'OUTPUT'
-        
-        # Skip if not a recognized I/O operation
-        if io_direction == 'UNKNOWN':
-            logger.debug(f"Unrecognized I/O operation: {command}")
-            return commands
-        
-        commands.append({
-            'command': command,
-            'resource': resource,
-            'resource_type': resource_type,
-            'io_direction': io_direction,
-            'line': line_num,
-            'source_line': statement.strip()
-        })
-        
-        logger.debug(f"Extracted CICS I/O: {command} {resource} ({io_direction})")
-        
-        return commands
-    
-    # Apply patches
-    COBOLParser.extract_cics_commands = enhanced_extract_cics_commands
-    COBOLParser._parse_cics_io_statement = parse_cics_io_statement
-    logger.info("✓ Patched COBOLParser.extract_cics_commands")
-
-
-def patch_graph_builder_cics():
-    """
-    Patch ProgramGraphBuilder to properly handle CICS file nodes as I/O
+    Fix CICS file extraction to properly create input/output file nodes.
+    This ensures files appear in search results and program chains.
     """
     from cobol_rag_agent import ProgramGraphBuilder
     
-    def enhanced_add_cics_command(self, program_id: str, command_info):
+    def enhanced_add_cics_command(self, program_id: str, command_info: Dict):
         """
-        EMERGENCY FIX v1.0.3: Extract CICS file info from ANY format
+        Enhanced CICS handler that creates proper file nodes.
         
-        Handles THREE formats:
-        1. String (old): Just skip
-        2. Dict without 'resource' (old dict): Parse the 'statement' text
-        3. Dict with 'resource' (new): Use directly
+        Handles 3 formats:
+        1. New dict with 'resource' key
+        2. Old dict with 'command' and 'statement'
+        3. Legacy string format (skip)
         """
-        
-        # Format 1: String (really old) - skip
+        # Skip string format
         if isinstance(command_info, str):
             logger.debug(f"Skipping string CICS command: {command_info}")
             return
@@ -452,36 +48,37 @@ def patch_graph_builder_cics():
             logger.warning(f"Invalid command_info type: {type(command_info)}")
             return
         
-        # Format 3: New enhanced format (has 'resource')
+        # Format detection and parsing
+        resource = None
+        resource_type = None
+        io_direction = None
+        command = None
+        
+        # NEW FORMAT: Has 'resource' key
         if 'resource' in command_info:
             resource = command_info.get('resource')
             resource_type = command_info.get('resource_type', 'FILE')
             io_direction = command_info.get('io_direction', 'INPUT')
             command = command_info.get('command', 'UNKNOWN')
-            
             logger.debug(f"Using NEW format: {command} {resource} ({io_direction})")
         
-        # Format 2: Old dict format (has 'command' and maybe 'statement' but no 'resource')
-        # THIS IS THE CRITICAL FIX - Parse the statement to extract file info!
+        # OLD FORMAT: Has 'command' but no 'resource' - parse statement
         elif 'command' in command_info:
             command = command_info.get('command', '').upper()
             statement = command_info.get('statement', '')
             
             if not statement:
-                logger.debug(f"Old format dict with no statement: {command}")
+                logger.debug(f"Old format with no statement: {command}")
                 return
             
-            logger.debug(f"EMERGENCY parsing old format: {command}")
+            logger.debug(f"Parsing OLD format: {command}")
             
-            # Extract resource from DATASET(...) or FILE(...) or QUEUE(...)
+            # Extract resource from DATASET/FILE/QUEUE
             resource_patterns = [
                 (r"DATASET\s*\(\s*['\"]?([A-Z0-9\-_]+)['\"]?\s*\)", 'DATASET'),
                 (r"FILE\s*\(\s*['\"]?([A-Z0-9\-_]+)['\"]?\s*\)", 'FILE'),
                 (r"QUEUE\s*\(\s*['\"]?([A-Z0-9\-_]+)['\"]?\s*\)", 'QUEUE')
             ]
-            
-            resource = None
-            resource_type = None
             
             for pattern, rtype in resource_patterns:
                 match = re.search(pattern, statement, re.IGNORECASE)
@@ -492,19 +89,19 @@ def patch_graph_builder_cics():
                     break
             
             if not resource:
-                logger.debug(f"Could not extract resource from: {statement[:100]}")
+                logger.debug(f"No resource found in: {statement[:100]}")
                 return
             
-            # Determine I/O direction from command
-            input_operations = {'READ', 'READNEXT', 'READPREV', 'STARTBR'}
-            output_operations = {'WRITE', 'REWRITE', 'DELETE'}
+            # Determine I/O direction
+            input_ops = {'READ', 'READNEXT', 'READPREV', 'STARTBR'}
+            output_ops = {'WRITE', 'REWRITE', 'DELETE'}
             
-            if command in input_operations:
+            if command in input_ops:
                 io_direction = 'INPUT'
-            elif command in output_operations:
+            elif command in output_ops:
                 io_direction = 'OUTPUT'
             else:
-                logger.debug(f"Unknown operation type for {command}, skipping")
+                logger.debug(f"Unknown I/O type for {command}, skipping")
                 return
             
             logger.info(f"✓ Classified as {io_direction}: {command} {resource}")
@@ -513,46 +110,50 @@ def patch_graph_builder_cics():
             logger.warning(f"Unknown dict format: {command_info}")
             return
         
-        # Now create the graph nodes (same logic for all formats)
-        resource = command_info.get('resource') if 'resource' in command_info else resource
-        resource_type = command_info.get('resource_type', 'FILE') if 'resource' in command_info else resource_type
-        io_direction = command_info.get('io_direction', 'INPUT') if 'resource' in command_info else io_direction
-        command = command_info.get('command', 'UNKNOWN') if 'resource' in command_info else command
-        
+        # Validate we have required info
         if not resource:
             return
         
-        # Create file node ID
-        if io_direction == 'INPUT':
-            file_node = f"cics_input:{resource}"
-            node_type = 'cics_input_file'
-        else:
-            file_node = f"cics_output:{resource}"
-            node_type = 'cics_output_file'
-        
-        # Add file node if it doesn't exist
-        if not self.graph.has_node(file_node):
-            self.graph.add_node(
-                file_node,
-                node_type=node_type,
-                name=resource,
-                resource_type=resource_type,
-                cics_operation=command
-            )
-        
-        # Add edge: input -> program or program -> output
+        # Create proper file nodes
         prog_node = f"prog:{program_id}"
         
         if io_direction == 'INPUT':
-            # Input file -> Program
+            # INPUT: file -> program
+            file_node = f"cics_input:{resource}"
+            
+            if not self.graph.has_node(file_node):
+                self.graph.add_node(
+                    file_node,
+                    node_type='cics_input_file',
+                    name=resource,
+                    resource_type=resource_type,
+                    cics_operation=command
+                )
+                logger.info(f"✓ Created INPUT file node: {file_node}")
+            
+            # Edge: file -> program
             self.graph.add_edge(
                 file_node,
                 prog_node,
                 edge_type='cics_read',
                 operation=command
             )
-        else:
-            # Program -> Output file
+            
+        else:  # OUTPUT
+            # OUTPUT: program -> file
+            file_node = f"cics_output:{resource}"
+            
+            if not self.graph.has_node(file_node):
+                self.graph.add_node(
+                    file_node,
+                    node_type='cics_output_file',
+                    name=resource,
+                    resource_type=resource_type,
+                    cics_operation=command
+                )
+                logger.info(f"✓ Created OUTPUT file node: {file_node}")
+            
+            # Edge: program -> file
             self.graph.add_edge(
                 prog_node,
                 file_node,
@@ -560,30 +161,174 @@ def patch_graph_builder_cics():
                 operation=command
             )
         
-        logger.debug(f"Added CICS {io_direction} file: {resource} ({command})")
+        logger.info(f"✓ Added CICS {io_direction} file: {resource} ({command})")
     
     # Apply patch
     ProgramGraphBuilder.add_cics_command = enhanced_add_cics_command
-    logger.info("✓ Patched ProgramGraphBuilder.add_cics_command")
+    logger.info("✓ Patched ProgramGraphBuilder.add_cics_command (CICS files now appear in results)")
 
 
-def patch_flow_diagram_colors():
+# ============================================================================
+# FIX 2: combined_search Index Out of Bounds
+# ============================================================================
+
+def patch_combined_search():
     """
-    Patch EnhancedFlowDiagramGenerator to use proper colors:
-    - Green for DB2 tables
-    - Light green for input files
-    - Red for output files
-    - Blue for programs
+    Fix combined_search to handle empty results and prevent index errors.
+    """
+    from cobol_rag_agent import MCPServer
+    
+    def safe_combined_search(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Safe combined search with bounds checking"""
+        query = params.get('query', '')
+        top_k = params.get('top_k', 5)
+        
+        logger.info(f"Combined search: '{query}' (top_k={top_k})")
+        
+        # Search code and docs
+        code_results = self.code_index.search(query, top_k)
+        doc_results = self.doc_index.search(query, top_k)
+        
+        logger.info(f"Code results: {len(code_results)}, Doc results: {len(doc_results)}")
+        
+        # Collect graph context safely
+        graph_context = []
+        
+        # Only process results that exist
+        for i, result in enumerate(code_results[:3]):  # Limit to top 3
+            try:
+                chunk = result.get('chunk')
+                if not chunk:
+                    logger.warning(f"Result {i} has no chunk")
+                    continue
+                
+                metadata = chunk.get('metadata', {})
+                program_id = metadata.get('program_id')
+                
+                if not program_id:
+                    logger.debug(f"Result {i} has no program_id")
+                    continue
+                
+                node_id = f"prog:{program_id}"
+                
+                # Check if node exists before getting neighbors
+                if not self.graph.graph.has_node(node_id):
+                    logger.debug(f"Node {node_id} not in graph")
+                    continue
+                
+                neighbors = self.graph.get_neighbors(node_id, depth=1)
+                
+                # Add to context if neighbors found
+                if neighbors and 'error' not in neighbors:
+                    graph_context.append({
+                        'program': program_id,
+                        'neighbors': neighbors
+                    })
+                    logger.debug(f"Added graph context for {program_id}")
+                
+            except Exception as e:
+                logger.warning(f"Error processing result {i}: {e}")
+                continue
+        
+        logger.info(f"Graph context collected: {len(graph_context)} programs")
+        
+        return {
+            'query': query,
+            'code_results': code_results,
+            'doc_results': doc_results,
+            'graph_context': graph_context
+        }
+    
+    # Apply patch
+    MCPServer._combined_search = safe_combined_search
+    logger.info("✓ Patched MCPServer._combined_search (fixed index errors)")
+
+
+# ============================================================================
+# FIX 3: Tree-sitter COBOL Installation Detection
+# ============================================================================
+
+def patch_treesitter_detection():
+    """
+    Enhanced tree-sitter detection that tries multiple methods and provides
+    clear feedback about what's available.
+    """
+    from cobol_rag_agent import COBOLParser
+    
+    def enhanced_init_parser(self):
+        """Try multiple tree-sitter installation methods"""
+        try:
+            # Method 1: tree_sitter_languages (easiest)
+            try:
+                from tree_sitter_languages import get_parser
+                self.parser = get_parser('cobol')
+                logger.info("✓ Tree-Sitter: Using tree_sitter_languages")
+                return
+            except ImportError:
+                logger.debug("tree_sitter_languages not installed")
+            except Exception as e:
+                logger.debug(f"tree_sitter_languages failed: {e}")
+            
+            # Method 2: tree_sitter_cobol (new API)
+            try:
+                from tree_sitter import Parser
+                import tree_sitter_cobol
+                
+                self.parser = Parser()
+                self.parser.set_language(tree_sitter_cobol.language())
+                logger.info("✓ Tree-Sitter: Using tree_sitter_cobol")
+                return
+            except ImportError:
+                logger.debug("tree_sitter_cobol not installed")
+            except Exception as e:
+                logger.debug(f"tree_sitter_cobol failed: {e}")
+            
+            # Method 3: Old API with .so file
+            try:
+                from tree_sitter import Language, Parser
+                
+                COBOL_LANGUAGE = Language('build/cobol.so', 'cobol')
+                self.parser = Parser()
+                self.parser.set_language(COBOL_LANGUAGE)
+                logger.info("✓ Tree-Sitter: Using legacy .so file")
+                return
+            except Exception as e:
+                logger.debug(f"Legacy API failed: {e}")
+            
+            # All methods failed - use heuristic parser
+            raise Exception("No tree-sitter installation found")
+            
+        except Exception as e:
+            logger.warning("Tree-sitter COBOL not available - using heuristic parser")
+            logger.info("To install tree-sitter: pip install tree-sitter-languages")
+            self.parser = None
+    
+    # Apply patch
+    COBOLParser._init_parser = enhanced_init_parser
+    logger.info("✓ Patched COBOLParser._init_parser (better tree-sitter detection)")
+
+
+# ============================================================================
+# FIX 4: Flow HTML Color Coding
+# ============================================================================
+
+def patch_flow_html_colors():
+    """
+    Fix flow HTML generation to use correct Mermaid class names.
+    The issue is that node types in the graph don't match Mermaid class names.
     """
     from cobol_rag_agent import EnhancedFlowDiagramGenerator
     
-    def enhanced_generate_mermaid_with_files(self, root_program: str, flow_data: Dict, max_depth: int) -> str:
+    def fixed_generate_mermaid(self, root_program: str, flow_data: Dict, max_depth: int) -> str:
         """
-        Generate Mermaid diagram with proper styling:
-        - Inputs at top (green)
-        - Processing in middle (blue)
-        - Databases with DB symbol (green)
-        - Outputs at bottom (red)
+        Generate Mermaid with CORRECT class assignments based on node_type.
+        
+        Node types from graph:
+        - 'program' -> programStyle (blue)
+        - 'cics_input_file' -> inputFileStyle (green)
+        - 'cics_output_file' -> outputFileStyle (red)
+        - 'db2_table' -> databaseStyle (green)
+        - 'mq_operation' -> mqStyle (orange)
         """
         lines = [
             "graph TB",
@@ -599,24 +344,53 @@ def patch_flow_diagram_colors():
         ]
         
         def clean_id(name: str) -> str:
+            """Clean name for Mermaid ID"""
             return name.replace('-', '_').replace('.', '_').replace('/', '_').replace(' ', '_').replace(':', '_')
         
+        # Track added nodes and edges
+        added_nodes = set()
+        added_edges = set()
+        
+        # Add root program
         root_id = clean_id(root_program)
         lines.append(f"    {root_id}[\"🔷 {root_program}<br/><b>MAIN PROGRAM</b>\"]")
         lines.append(f"    class {root_id} programStyle")
+        added_nodes.add(root_id)
         lines.append("")
         
-        added_nodes = {root_id}
-        added_edges = set()
+        # Helper to determine class based on node type
+        def get_node_class(node_id: str) -> str:
+            """Get Mermaid class based on node type in graph"""
+            if not self.graph.has_node(node_id):
+                return 'programStyle'
+            
+            node_data = self.graph.nodes[node_id]
+            node_type = node_data.get('node_type', 'program')
+            
+            # Map node types to classes
+            type_to_class = {
+                'program': 'programStyle',
+                'cics_input_file': 'inputFileStyle',
+                'cics_output_file': 'outputFileStyle',
+                'db2_table': 'databaseStyle',
+                'mq_operation': 'mqStyle',
+                'mq_queue': 'mqStyle'
+            }
+            
+            return type_to_class.get(node_type, 'programStyle')
         
         # Add input files at top
         if flow_data.get('input_files'):
             lines.append("    %% Input Files (Top)")
             for file in flow_data['input_files']:
-                file_id = clean_id(f"in_{file}")
+                file_id = clean_id(f"cics_input:{file}")
+                
                 if file_id not in added_nodes:
                     lines.append(f"    {file_id}[\"📥 {file}<br/><small>INPUT FILE</small>\"]")
-                    lines.append(f"    class {file_id} inputFileStyle")
+                    
+                    # Get correct class from graph
+                    node_class = get_node_class(f"cics_input:{file}")
+                    lines.append(f"    class {file_id} {node_class}")
                     added_nodes.add(file_id)
                 
                 edge = (file_id, root_id)
@@ -625,18 +399,21 @@ def patch_flow_diagram_colors():
                     added_edges.add(edge)
             lines.append("")
         
-        # Add database operations with DB symbol
+        # Add database operations
         if flow_data.get('databases'):
             lines.append("    %% Database Tables")
             for db_info in flow_data['databases']:
                 table = db_info['table']
                 operation = db_info.get('operation', 'ACCESS')
-                table_id = clean_id(f"db_{table}")
+                table_id = clean_id(f"table:{table}")
                 
                 if table_id not in added_nodes:
-                    # Use database symbol
+                    # Database symbol
                     lines.append(f"    {table_id}[(\"🗄️ {table}<br/><small>{operation}</small>\")]")
-                    lines.append(f"    class {table_id} databaseStyle")
+                    
+                    # Get correct class
+                    node_class = get_node_class(f"table:{table}")
+                    lines.append(f"    class {table_id} {node_class}")
                     added_nodes.add(table_id)
                 
                 edge = (root_id, table_id)
@@ -677,10 +454,14 @@ def patch_flow_diagram_colors():
         if flow_data.get('output_files'):
             lines.append("    %% Output Files (Bottom)")
             for file in flow_data['output_files']:
-                file_id = clean_id(f"out_{file}")
+                file_id = clean_id(f"cics_output:{file}")
+                
                 if file_id not in added_nodes:
                     lines.append(f"    {file_id}[\"📤 {file}<br/><small>OUTPUT FILE</small>\"]")
-                    lines.append(f"    class {file_id} outputFileStyle")
+                    
+                    # Get correct class
+                    node_class = get_node_class(f"cics_output:{file}")
+                    lines.append(f"    class {file_id} {node_class}")
                     added_nodes.add(file_id)
                 
                 edge = (root_id, file_id)
@@ -693,10 +474,14 @@ def patch_flow_diagram_colors():
         if flow_data.get('mq_queues'):
             lines.append("    %% MQ Queues")
             for queue in flow_data['mq_queues']:
-                queue_id = clean_id(f"mq_{queue}")
+                queue_id = clean_id(f"mq:{queue}")
+                
                 if queue_id not in added_nodes:
                     lines.append(f"    {queue_id}[\"📨 {queue}<br/><small>MQ QUEUE</small>\"]")
-                    lines.append(f"    class {queue_id} mqStyle")
+                    
+                    # Get correct class
+                    node_class = get_node_class(f"mq:{queue}")
+                    lines.append(f"    class {queue_id} {node_class}")
                     added_nodes.add(queue_id)
                 
                 edge = (root_id, queue_id)
@@ -708,130 +493,149 @@ def patch_flow_diagram_colors():
         return '\n'.join(lines)
     
     # Apply patch
-    EnhancedFlowDiagramGenerator._generate_mermaid_with_files = enhanced_generate_mermaid_with_files
-    logger.info("✓ Patched EnhancedFlowDiagramGenerator._generate_mermaid_with_files")
+    EnhancedFlowDiagramGenerator._generate_mermaid_with_files = fixed_generate_mermaid
+    logger.info("✓ Patched EnhancedFlowDiagramGenerator (colors now work correctly)")
 
 
-def patch_cobol_indexer():
+# ============================================================================
+# FIX 4B: ProgramChainAnalyzer for full_program_chain
+# ============================================================================
+
+def patch_chain_analyzer():
     """
-    Patch COBOLIndexer to use enhanced CICS command info
+    Fix ProgramChainAnalyzer to properly collect CICS files for full_program_chain.
     """
-    from cobol_rag_agent import COBOLIndexer
+    from cobol_rag_agent import ProgramChainAnalyzer
     
-    # Store original method
-    original_index_directory = COBOLIndexer.index_directory
-    
-    def enhanced_index_directory(self, source_dir: str):
-        """Enhanced indexing that properly handles CICS I/O"""
-        from pathlib import Path
+    def enhanced_traverse_chain(self, node: str, chain: Dict, visited: set, depth: int, max_depth: int):
+        """Enhanced chain traversal that properly handles CICS files"""
+        if depth > max_depth or node in visited:
+            return
         
-        source_path = Path(source_dir)
+        visited.add(node)
         
-        logger.info(f"Indexing directory: {source_dir}")
+        if not self.graph.has_node(node):
+            return
         
-        cobol_files = list(source_path.rglob('*.cbl')) + list(source_path.rglob('*.cob'))
-        jcl_files = list(source_path.rglob('*.jcl'))
-        copybook_files = list(source_path.rglob('*.cpy'))
+        node_data = self.graph.nodes.get(node, {})
+        node_type = node_data.get('node_type', 'unknown')
+        node_name = node_data.get('name', node)
         
-        logger.info(f"Found {len(cobol_files)} COBOL files, {len(jcl_files)} JCL files, {len(copybook_files)} copybooks")
+        step = {
+            'depth': depth,
+            'type': node_type,
+            'name': node_name,
+            'inputs': [],
+            'outputs': [],
+            'calls': []
+        }
         
-        all_chunks = []
-        for filepath in cobol_files:
-            logger.info(f"Processing: {filepath}")
-            with open(filepath, 'r', encoding='latin-1', errors='ignore') as f:
-                source_code = f.read()
+        # Analyze successors
+        for successor in self.graph.successors(node):
+            succ_data = self.graph.nodes.get(successor, {})
+            succ_type = succ_data.get('node_type', '')
+            succ_name = succ_data.get('name', successor)
+            edge_data = self.graph.get_edge_data(node, successor)
             
-            chunks = self.cobol_parser.parse_cobol(source_code, str(filepath))
-            all_chunks.extend(chunks)
-            
-            program_id = self._extract_program_id_from_chunks(chunks)
-            self.graph.add_program(program_id, str(filepath))
-            
-            # Extract calls
-            calls = self.cobol_parser.extract_calls(source_code)
-            logger.info(f"Processing {len(calls)} calls from {program_id}")
-            
-            for call in calls:
-                target = call.get('target')
-                call_mechanism = call.get('call_mechanism', call.get('type', 'static'))
+            # PROGRAMS
+            if succ_type == 'program':
+                step['calls'].append({
+                    'program': succ_name,
+                    'call_type': edge_data.get('type', 'static') if edge_data else 'static'
+                })
+                chain['programs_called'].append(succ_name)
                 
-                call_type_map = {
-                    'STATIC_CALL': 'static',
-                    'DYNAMIC_CALL': 'dynamic',
-                    'CICS_LINK': 'cics_link',
-                    'CICS_LINK_DYNAMIC': 'cics_link_dynamic',
-                    'CICS_XCTL': 'cics_xctl',
-                    'CICS_XCTL_DYNAMIC': 'cics_xctl_dynamic',
-                    'static': 'static',
-                    'dynamic': 'dynamic',
-                    'cics_link': 'cics_link',
-                    'cics_xctl': 'cics_xctl'
+                # Recursively analyze
+                self._traverse_chain(successor, chain, visited, depth + 1, max_depth)
+            
+            # CICS OUTPUT FILES
+            elif succ_type == 'cics_output_file':
+                file_info = {
+                    'name': succ_name,
+                    'operation': edge_data.get('operation', 'WRITE') if edge_data else 'WRITE',
+                    'type': 'CICS_OUTPUT'
                 }
+                step['outputs'].append(file_info)
                 
-                simple_call_type = call_type_map.get(call_mechanism, 'static')
+                if succ_name not in chain['files'].get('output', []):
+                    chain['files']['output'].append(succ_name)
+            
+            # DB2 TABLES
+            elif succ_type == 'db2_table':
+                operation = edge_data.get('operation', 'ACCESS') if edge_data else 'ACCESS'
+                db_info = {'table': succ_name, 'operation': operation}
                 
-                if target:
-                    logger.info(f"  → Adding call: {program_id} -> {target} ({simple_call_type})")
-                    self.graph.add_call(program_id, target, simple_call_type)
+                if operation in ['SELECT', 'READ']:
+                    step['inputs'].append(db_info)
+                else:
+                    step['outputs'].append(db_info)
                 
-                if call.get('is_dynamic') and call.get('possible_targets'):
-                    logger.info(f"  → Dynamic call resolved to {len(call['possible_targets'])} targets")
-                    for resolved_target in call['possible_targets']:
-                        logger.info(f"    → {program_id} -> {resolved_target} ({simple_call_type})")
-                        self.graph.add_call(program_id, resolved_target, simple_call_type)
+                if succ_name not in [d['table'] for d in chain['databases']]:
+                    chain['databases'].append(db_info)
             
-            # Extract DB2 operations
-            db2_ops = self.cobol_parser.extract_db2_operations(source_code)
-            for op in db2_ops:
-                if op['table']:
-                    self.graph.add_db2_table(program_id, op['table'], op['type'])
-            
-            # Extract CICS commands (now returns enhanced dict)
-            cics_cmds = self.cobol_parser.extract_cics_commands(source_code)
-            for cmd in cics_cmds:
-                # Use enhanced add_cics_command that handles I/O direction
-                self.graph.add_cics_command(program_id, cmd)
-            
-            # Extract MQ operations
-            mq_ops = self.cobol_parser.extract_mq_operations(source_code)
-            for op in mq_ops:
-                self.graph.add_mq_queue(program_id, op['operation'])
+            # MQ OPERATIONS
+            elif succ_type in ['mq_operation', 'mq_queue']:
+                mq_info = {'operation': succ_name}
+                
+                if 'GET' in succ_name.upper() or 'READ' in succ_name.upper():
+                    step['inputs'].append(mq_info)
+                else:
+                    step['outputs'].append(mq_info)
+                
+                if succ_name not in chain['mq_queues']:
+                    chain['mq_queues'].append(succ_name)
         
-        # Process JCL files
-        for filepath in jcl_files:
-            logger.info(f"Processing JCL: {filepath}")
-            with open(filepath, 'r', encoding='latin-1', errors='ignore') as f:
-                source_code = f.read()
+        # Analyze predecessors for CICS INPUT FILES
+        for predecessor in self.graph.predecessors(node):
+            pred_data = self.graph.nodes.get(predecessor, {})
+            pred_type = pred_data.get('node_type', '')
+            pred_name = pred_data.get('name', predecessor)
+            edge_data = self.graph.get_edge_data(predecessor, node)
             
-            chunks = self.jcl_parser.parse_jcl(source_code, str(filepath))
-            all_chunks.extend(chunks)
+            # CICS INPUT FILES
+            if pred_type == 'cics_input_file':
+                file_info = {
+                    'name': pred_name,
+                    'operation': edge_data.get('operation', 'READ') if edge_data else 'READ',
+                    'type': 'CICS_INPUT'
+                }
+                step['inputs'].append(file_info)
+                
+                if pred_name not in chain['files'].get('input', []):
+                    chain['files']['input'].append(pred_name)
         
-        self.code_index.add_chunks(all_chunks)
-        
-        logger.info("Indexing complete!")
+        chain['execution_flow'].append(step)
     
     # Apply patch
-    COBOLIndexer.index_directory = enhanced_index_directory
-    logger.info("✓ Patched COBOLIndexer.index_directory")
+    ProgramChainAnalyzer._traverse_chain = enhanced_traverse_chain
+    logger.info("✓ Patched ProgramChainAnalyzer._traverse_chain (CICS files now appear)")
 
 
-# Auto-apply all patches when module is imported
+# ============================================================================
+# MASTER PATCH APPLICATION
+# ============================================================================
+
 def apply_all_patches():
-    """Apply all patches automatically"""
+    """Apply all v1.0.4 patches"""
     logger.info("=" * 70)
-    logger.info("APPLYING COBOL RAG AGENT PATCHES v1.0.3")
+    logger.info("APPLYING COBOL RAG AGENT PATCHES v1.0.4")
     logger.info("=" * 70)
     
     try:
-        patch_treesitter_languages()
-        patch_dynamic_call_resolution()
-        patch_cics_file_extraction()
-        patch_graph_builder_cics()
-        patch_flow_diagram_colors()
-        patch_cobol_indexer()
+        # Apply all fixes
+        patch_cics_file_nodes()
+        patch_combined_search()
+        patch_treesitter_detection()
+        patch_flow_html_colors()
+        patch_chain_analyzer()
         
         logger.info("=" * 70)
-        logger.info("✓ ALL PATCHES APPLIED SUCCESSFULLY")
+        logger.info("✓ ALL v1.0.4 PATCHES APPLIED SUCCESSFULLY")
+        logger.info("Fixes:")
+        logger.info("  1. ✓ CICS files now appear in search_code/full_program_chain")
+        logger.info("  2. ✓ combined_search no longer crashes with index errors")
+        logger.info("  3. ✓ Tree-sitter detection improved with clear messages")
+        logger.info("  4. ✓ Flow HTML colors now work correctly (green/blue/red/orange)")
         logger.info("=" * 70)
         
     except Exception as e:
@@ -839,5 +643,12 @@ def apply_all_patches():
         raise
 
 
-# Apply patches when module is imported
-apply_all_patches()
+# Auto-apply when imported
+if __name__ != '__main__':
+    apply_all_patches()
+
+
+if __name__ == '__main__':
+    # Allow manual application
+    apply_all_patches()
+    print("✓ All patches applied successfully!")
