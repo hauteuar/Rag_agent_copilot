@@ -1,10 +1,11 @@
 """
-COBOL RAG Agent Patches - Dynamic Call Resolution & CICS File Extraction
-=========================================================================
-This module patches cobol_rag_agent.py to fix:
-1. Dynamic call resolution for group variables with subscripts
-2. CICS command extraction to show actual file names instead of command types
-3. Enhanced flow diagram with proper I/O classification
+COBOL RAG Agent Patches v1.0.3 - COMPLETE FIX
+==============================================
+Fixes:
+1. Dynamic call resolution (VALUE clauses)
+2. CICS file extraction (parses old format)
+3. Flow diagram colors
+4. Tree-sitter warning fix
 
 USAGE:
     import cobol_rag_patches  # Auto-applies all patches
@@ -15,6 +16,69 @@ import logging
 from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+
+def patch_treesitter_languages():
+    """
+    Patch COBOLParser to use tree_sitter_languages (modern API)
+    This eliminates the "__init__() takes exactly 1 argument" warning
+    """
+    from cobol_rag_agent import COBOLParser
+    
+    def fixed_init_parser(self):
+        """Initialize Tree-Sitter parser for COBOL using tree_sitter_languages"""
+        try:
+            # Method 1: Try tree_sitter_languages (easiest, modern)
+            try:
+                from tree_sitter_languages import get_language, get_parser
+                
+                # Get COBOL language and parser
+                self.parser = get_parser('cobol')
+                logger.info("✓ Tree-Sitter COBOL parser initialized via tree_sitter_languages")
+                return
+            except ImportError:
+                logger.debug("tree_sitter_languages not installed")
+            except Exception as e:
+                logger.debug(f"tree_sitter_languages failed: {e}")
+            
+            # Method 2: Try tree_sitter_cobol (new API)
+            try:
+                from tree_sitter import Parser
+                import tree_sitter_cobol
+                
+                COBOL_LANGUAGE = tree_sitter_cobol.language()
+                self.parser = Parser()
+                self.parser.set_language(COBOL_LANGUAGE)
+                logger.info("✓ Tree-Sitter COBOL parser initialized via tree_sitter_cobol")
+                return
+            except ImportError:
+                logger.debug("tree_sitter_cobol not installed")
+            except Exception as e:
+                logger.debug(f"tree_sitter_cobol failed: {e}")
+            
+            # Method 3: Try old API (for backward compatibility)
+            try:
+                from tree_sitter import Language, Parser
+                
+                COBOL_LANGUAGE = Language('build/cobol.so', 'cobol')
+                self.parser = Parser()
+                self.parser.set_language(COBOL_LANGUAGE)
+                logger.info("✓ Tree-Sitter COBOL parser initialized via old API")
+                return
+            except Exception as e:
+                logger.debug(f"Old API failed: {e}")
+            
+            # All methods failed
+            raise Exception("No tree-sitter COBOL installation found")
+            
+        except Exception as e:
+            logger.warning(f"Tree-sitter COBOL not available: {e}")
+            logger.info("Using heuristic parser (fully functional)")
+            self.parser = None
+    
+    # Apply patch
+    COBOLParser._init_parser = fixed_init_parser
+    logger.info("✓ Patched COBOLParser._init_parser (tree-sitter warning fix)")
 
 
 def patch_dynamic_call_resolution():
@@ -755,10 +819,11 @@ def patch_cobol_indexer():
 def apply_all_patches():
     """Apply all patches automatically"""
     logger.info("=" * 70)
-    logger.info("APPLYING COBOL RAG AGENT PATCHES")
+    logger.info("APPLYING COBOL RAG AGENT PATCHES v1.0.3")
     logger.info("=" * 70)
     
     try:
+        patch_treesitter_languages()
         patch_dynamic_call_resolution()
         patch_cics_file_extraction()
         patch_graph_builder_cics()
