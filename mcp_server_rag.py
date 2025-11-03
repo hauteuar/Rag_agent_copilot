@@ -1048,7 +1048,7 @@ def main():
             "id": None,
             "error": {
                 "code": -32000,
-                "message": f"Server initialization failed: {str(e)}"
+                "message": f"Server initialization failed: {str(e)}"    
             }
         }
         print(json.dumps(error))
