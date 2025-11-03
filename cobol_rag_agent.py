@@ -105,7 +105,7 @@ class COBOLParser:
         """Initialize Tree-Sitter parser for COBOL (if available)"""
         try:
             from tree_sitter import Language, Parser
-            COBOL_LANGUAGE = Language('build/cobol.so', 'cobol')
+            COBOL_LANGUAGE = tree_sitter_cobol.language()
             self.parser = Parser()
             self.parser.set_language(COBOL_LANGUAGE)
             logger.info("✓ Tree-Sitter COBOL parser initialized")
