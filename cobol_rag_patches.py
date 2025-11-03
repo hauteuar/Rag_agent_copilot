@@ -371,36 +371,89 @@ def patch_graph_builder_cics():
     
     def enhanced_add_cics_command(self, program_id: str, command_info):
         """
-        Add CICS file as input or output node based on operation type.
+        EMERGENCY FIX v1.0.3: Extract CICS file info from ANY format
         
-        Args:
-            command_info: Dict with keys (new format):
-                - command: CICS command (READ, WRITE, etc.)
-                - resource: File/dataset name
-                - resource_type: DATASET, FILE, or QUEUE
-                - io_direction: INPUT or OUTPUT
-            OR string (old format): just the command name (for backward compatibility)
+        Handles THREE formats:
+        1. String (old): Just skip
+        2. Dict without 'resource' (old dict): Parse the 'statement' text
+        3. Dict with 'resource' (new): Use directly
         """
-        # Handle backward compatibility: if command_info is a string or dict without 'resource'
+        
+        # Format 1: String (really old) - skip
         if isinstance(command_info, str):
-            # Old format: just command name - skip it (we can't extract file info)
-            logger.debug(f"Skipping old-format CICS command: {command_info}")
+            logger.debug(f"Skipping string CICS command: {command_info}")
             return
         
         if not isinstance(command_info, dict):
             logger.warning(f"Invalid command_info type: {type(command_info)}")
             return
         
-        # Check if this is the old dict format (has 'command' but no 'resource')
-        if 'command' in command_info and 'resource' not in command_info:
-            logger.debug(f"Skipping old-format CICS command dict: {command_info.get('command')}")
+        # Format 3: New enhanced format (has 'resource')
+        if 'resource' in command_info:
+            resource = command_info.get('resource')
+            resource_type = command_info.get('resource_type', 'FILE')
+            io_direction = command_info.get('io_direction', 'INPUT')
+            command = command_info.get('command', 'UNKNOWN')
+            
+            logger.debug(f"Using NEW format: {command} {resource} ({io_direction})")
+        
+        # Format 2: Old dict format (has 'command' and maybe 'statement' but no 'resource')
+        # THIS IS THE CRITICAL FIX - Parse the statement to extract file info!
+        elif 'command' in command_info:
+            command = command_info.get('command', '').upper()
+            statement = command_info.get('statement', '')
+            
+            if not statement:
+                logger.debug(f"Old format dict with no statement: {command}")
+                return
+            
+            logger.debug(f"EMERGENCY parsing old format: {command}")
+            
+            # Extract resource from DATASET(...) or FILE(...) or QUEUE(...)
+            resource_patterns = [
+                (r"DATASET\s*\(\s*['\"]?([A-Z0-9\-_]+)['\"]?\s*\)", 'DATASET'),
+                (r"FILE\s*\(\s*['\"]?([A-Z0-9\-_]+)['\"]?\s*\)", 'FILE'),
+                (r"QUEUE\s*\(\s*['\"]?([A-Z0-9\-_]+)['\"]?\s*\)", 'QUEUE')
+            ]
+            
+            resource = None
+            resource_type = None
+            
+            for pattern, rtype in resource_patterns:
+                match = re.search(pattern, statement, re.IGNORECASE)
+                if match:
+                    resource = match.group(1)
+                    resource_type = rtype
+                    logger.info(f"✓ EXTRACTED from old format: {resource_type}={resource}")
+                    break
+            
+            if not resource:
+                logger.debug(f"Could not extract resource from: {statement[:100]}")
+                return
+            
+            # Determine I/O direction from command
+            input_operations = {'READ', 'READNEXT', 'READPREV', 'STARTBR'}
+            output_operations = {'WRITE', 'REWRITE', 'DELETE'}
+            
+            if command in input_operations:
+                io_direction = 'INPUT'
+            elif command in output_operations:
+                io_direction = 'OUTPUT'
+            else:
+                logger.debug(f"Unknown operation type for {command}, skipping")
+                return
+            
+            logger.info(f"✓ Classified as {io_direction}: {command} {resource}")
+        
+        else:
+            logger.warning(f"Unknown dict format: {command_info}")
             return
         
-        # New format: extract all fields
-        resource = command_info.get('resource')
-        resource_type = command_info.get('resource_type', 'FILE')
-        io_direction = command_info.get('io_direction', 'INPUT')
-        command = command_info.get('command', 'UNKNOWN')
+        # Now create the graph nodes (same logic for all formats)
+        resource = command_info.get('resource') if 'resource' in command_info else resource
+        resource_type = command_info.get('resource_type', 'FILE') if 'resource' in command_info else resource_type
+        io_direction = command_info.get('io_direction', 'INPUT') if 'resource' in command_info else io_direction
+        command = command_info.get('command', 'UNKNOWN') if 'resource' in command_info else command
         
         if not resource:
             return
