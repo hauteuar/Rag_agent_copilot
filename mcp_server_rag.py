@@ -4,20 +4,7 @@ MCP Server Wrapper for COBOL RAG with HTML Flow Generation
 Implements proper MCP protocol for GitHub Copilot integration.
 Includes interactive HTML flow diagram generation.
 
-USAGE:
-    Set INDEX_DIR environment variable, then:
-    python mcp_server_rag.py
-    
-    Or use in VS Code settings.json:
-    {
-      "mcp.servers": {
-        "cobol-rag": {
-          "command": "python",
-          "args": ["-u", "path/to/mcp_server_rag.py"],
-          "env": {"INDEX_DIR": "path/to/index"}
-        }
-      }
-    }
+CORRECTED VERSION - Legend colors now match actual diagram colors
 """
 
 import sys
@@ -33,6 +20,7 @@ sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
 import cobol_rag_patches  # This auto-applies all patches
+
 # Import from cobol_rag_agent
 try:
     from cobol_rag_agent import COBOLIndexer, MCPServer
@@ -62,6 +50,8 @@ def generate_flow_html(mermaid_code: str, node_name: str, output_path: str = Non
     """
     Generate interactive HTML file with Mermaid diagram
     Returns the file path
+    
+    CORRECTED: Legend colors now match the actual Mermaid diagram colors
     """
     if output_path is None:
         output_path = f"flow_diagram_{node_name.replace(':', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
@@ -228,24 +218,31 @@ def generate_flow_html(mermaid_code: str, node_name: str, output_path: str = Non
             border: 2px solid;
         }}
         
+        /* CORRECTED COLORS - Match actual Mermaid diagram */
         .legend-program {{
             background: #4A90E2;
             border-color: #2E5C8A;
         }}
         
-        .legend-db2 {{
-            background: #50C878;
-            border-color: #2D7A4A;
+        .legend-input {{
+            background: #90EE90;  /* Light green */
+            border-color: #228B22; /* Forest green */
+        }}
+        
+        .legend-output {{
+            background: #FFB6C1;  /* Light pink */
+            border-color: #DC143C; /* Crimson */
+        }}
+        
+        .legend-db {{
+            background: #90EE90;  /* Light green - same as input */
+            border-color: #228B22; /* Forest green */
+            border-radius: 50%;   /* Make it circular like cylinder */
         }}
         
         .legend-mq {{
-            background: #FFA500;
-            border-color: #CC8400;
-        }}
-        
-        .legend-cics {{
-            background: #9B59B6;
-            border-color: #6C3483;
+            background: #FFA500;  /* Orange */
+            border-color: #CC8400; /* Dark orange */
         }}
         
         .info-panel {{
@@ -314,23 +311,27 @@ def generate_flow_html(mermaid_code: str, node_name: str, output_path: str = Non
         </div>
         
         <div class="legend">
-            <h3>Legend</h3>
+            <h3>Legend - Color Guide</h3>
             <div class="legend-items">
                 <div class="legend-item">
                     <div class="legend-box legend-program"></div>
-                    <span><strong>Program</strong> - COBOL program module</span>
+                    <span><strong>Program</strong> - COBOL program (blue)</span>
                 </div>
                 <div class="legend-item">
-                    <div class="legend-box legend-db2"></div>
-                    <span><strong>DB2 Table</strong> - Database table access</span>
+                    <div class="legend-box legend-input"></div>
+                    <span><strong>Input File</strong> - Data source (green)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-box legend-output"></div>
+                    <span><strong>Output File</strong> - Data sink (pink/red)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-box legend-db"></div>
+                    <span><strong>Database</strong> - DB2 table (green cylinder)</span>
                 </div>
                 <div class="legend-item">
                     <div class="legend-box legend-mq"></div>
-                    <span><strong>MQ Operation</strong> - Message queue operation</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-box legend-cics"></div>
-                    <span><strong>CICS Command</strong> - CICS transaction command</span>
+                    <span><strong>MQ Queue</strong> - Message queue (orange)</span>
                 </div>
             </div>
         </div>
@@ -339,7 +340,10 @@ def generate_flow_html(mermaid_code: str, node_name: str, output_path: str = Non
             <h3>About This Diagram</h3>
             <p>
                 This interactive flow diagram shows the program structure, dependencies, and interfaces 
-                for the COBOL program <strong>{node_name}</strong>. Use the zoom controls to explore 
+                for the COBOL program <strong>{node_name}</strong>. 
+                <strong>Color coding:</strong> Green items are data sources (inputs/databases), 
+                blue items are processing (programs), pink/red items are outputs, 
+                and orange items are message queues. Use the zoom controls to explore 
                 different parts of the diagram. Click the download buttons to save this diagram for 
                 documentation or presentations.
             </p>
@@ -523,7 +527,7 @@ class MCPServerWrapper:
             },
             "serverInfo": {
                 "name": "cobol-rag",
-                "version": "1.0.0"
+                "version": "1.0.1"
             }
         }
     
@@ -591,7 +595,7 @@ class MCPServerWrapper:
             },
             {
                 "name": "flow_mermaid",
-                "description": "Generate Mermaid flow diagram showing program flow with inputs at top, outputs at bottom, and processing in middle. Shows only I/O interfaces (files, DB2, MQ), not all CICS commands. Includes dynamic call resolution.",
+                "description": "Generate Mermaid flow diagram showing program flow with inputs at top, outputs at bottom, and processing in middle. Shows only I/O interfaces (files, DB2, MQ). Includes dynamic call resolution. Colors: Green for inputs/databases, Blue for programs, Pink/Red for outputs, Orange for MQ queues.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -610,7 +614,7 @@ class MCPServerWrapper:
             },
             {
                 "name": "flow_html",
-                "description": "Generate interactive HTML visualization of program flow. Creates an HTML file and opens it in browser with zoom, pan, download as SVG/PNG. Shows inputs/outputs/processing layout.",
+                "description": "Generate interactive HTML visualization of program flow. Creates an HTML file and opens it in browser with zoom, pan, download as SVG/PNG. Shows inputs/outputs/processing layout. Legend shows correct colors: Blue=Programs, Green=Input/DB, Pink=Output, Orange=MQ.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -737,12 +741,21 @@ class MCPServerWrapper:
 - 🖨️ Print-friendly
 - 📱 Responsive design
 
+🎨 **Color Legend (CORRECTED):**
+- 🔵 **Blue** = Programs (processing)
+- 🟢 **Green** = Input files & Databases (data sources)
+- 🔴 **Pink/Red** = Output files (data sinks)
+- 🟠 **Orange** = MQ Queues (messaging)
+
 📋 **The diagram shows:**
-- 📥 **Inputs at top** (files, MQ queues)
-- 💻 **Processing in middle** (programs)
-- 🗄️ **Database operations** (DB2 tables with operations)
-- 📤 **Outputs at bottom** (files, MQ queues)
+- 📥 **Inputs at top** (files, MQ queues) - GREEN
+- 💻 **Processing in middle** (programs) - BLUE
+- 🗄️ **Database operations** (DB2 tables) - GREEN CYLINDERS
+- 📤 **Outputs at bottom** (files) - PINK/RED
+- 📨 **MQ operations** - ORANGE
 - 🔗 **Dynamic calls resolved** (shows possible targets)
+
+The legend colors now match the actual diagram colors!
 
 You can now explore the flow visually in your browser!"""
                     }
@@ -796,19 +809,16 @@ You can now explore the flow visually in your browser!"""
                         program = call['program']
                         call_type = call['call_type']
                         
-                        # Format call with type indicator
-                        output = f"  🔗 {program}"
+                        output = f"{indent}    🔗 {program}"
                         
                         if call.get('is_dynamic'):
                             output += f" (cics_link_dynamic)"
                             
-                            # Show resolution method
                             if call.get('resolved_via_group'):
-                                output += f"\n       └─ Group: {call['resolved_via_group']}"
+                                output += f"\n{indent}       └─ Group: {call['resolved_via_group']}"
                             else:
-                                output += f"\n       └─ Direct: Variable resolution"
+                                output += f"\n{indent}       └─ Direct: Variable resolution"
                             
-                            # Show resolution details
                             if call.get('resolution_details'):
                                 details = call['resolution_details']
                                 for i, detail in enumerate(details):
@@ -817,9 +827,9 @@ You can now explore the flow visually in your browser!"""
                                     condition = detail.get('condition', '')
                                     
                                     if i == 0:
-                                        output += f"\n       └─ Line {line_num}: MOVE '{value}' TO {call.get('variable', '?')}"
+                                        output += f"\n{indent}       └─ Line {line_num}: MOVE '{value}' TO {call.get('variable', '?')}"
                                     else:
-                                        output += f"\n       └─ Line {line_num}: MOVE '{value}' TO {call.get('variable', '?')}"
+                                        output += f"\n{indent}       └─ Line {line_num}: MOVE '{value}' TO {call.get('variable', '?')}"
                                     
                                     if condition and condition != 'None':
                                         output += f" [{condition}]"
@@ -914,9 +924,8 @@ You can now explore the flow visually in your browser!"""
             if method == "initialize":
                 result = self.handle_initialize(params)
             elif method == "initialized":
-                # Client confirms initialization
                 logger.info("Client confirmed initialization")
-                return None  # No response needed for notification
+                return None
             elif method == "tools/list":
                 result = self.handle_tools_list(params)
             elif method == "tools/call":
@@ -970,7 +979,7 @@ You can now explore the flow visually in your browser!"""
                 request = json.loads(line)
                 response = self.handle_request(request)
                 
-                if response is not None:  # Some notifications don't need responses
+                if response is not None:
                     output = json.dumps(response)
                     print(output)
                     sys.stdout.flush()
@@ -1006,13 +1015,12 @@ def main():
     
     logger.info("Starting MCP Server Wrapper")
     
-    # Get index directory from args, environment, or default
+    # Get index directory
     if args.index_dir:
         index_dir = args.index_dir
     else:
         index_dir = os.getenv('INDEX_DIR', './index')
     
-    # Convert relative to absolute path
     index_dir = os.path.abspath(index_dir)
     logger.info(f"Index directory: {index_dir}")
     
